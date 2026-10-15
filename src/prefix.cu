@@ -1,6 +1,10 @@
 #include <cuda.h>
 #include <algorithm>
+#include <vector>
 #include "prefix.h"
+
+extern double *array_init_1d(const double *, const int, const double *, const int);
+extern double **array_init_2d(const double *, const int, const double *, const int);
 
 static void prefix_sum(double *seq, const int n)
 {
@@ -18,8 +22,10 @@ static void prefix_min(double *seq, const int n)
     }
 }
 
-void prefix_sequential(const double *X, const int start_row, const int end_row, const int n, const double *Y, const int m, double **D)
+void prefix_sequential(const double *X, const int row_start, const int row_end, const int n, const double *Y, const int m, double **D)
 {
+    double *x = new double[m];
+    double *y = new double[m];
     /*
         t   = min(D[i-1][j], D[i-1][j-1]) + Dist[j]
             = min(D[i-1][j], D[i-1][j-1]) + (y[j]-y[j-1])
@@ -31,9 +37,7 @@ void prefix_sequential(const double *X, const int start_row, const int end_row, 
         turns into
             x[j] = min(x[j], x[j-1])
     */
-    double *x = (double *)malloc(m * sizeof(double));
-    double *y = (double *)malloc(m * sizeof(double));
-    for (int i = start_row; i < end_row; i++)
+    for (int i = row_start; i < row_end; i++)
     {
         // calculate y
         for (int j = 0; j < m; j++)
@@ -54,8 +58,8 @@ void prefix_sequential(const double *X, const int start_row, const int end_row, 
             D[i][j] = x[j] + y[j];
         }
     }
-    free(x);
-    free(y);
+    delete[] x;
+    delete[] y;
 }
 
 /*
@@ -170,11 +174,11 @@ __device__ void prefix_min_parallel(double *seq, const int n)
     }
 }
 
-__global__ void dtw_prefix_kernel(const double *X, const int start_row, const int end_row, const double *Y, const int m, double *D, double *x, double *y)
+__global__ void dtw_prefix_kernel(const double *X, const int row_start, const int row_end, const double *Y, const int m, double *D, double *x, double *y)
 {
     const int id = blockIdx.x * blockDim.x + threadIdx.x;
 
-    for (int i = start_row; i < end_row; i++)
+    for (int i = row_start; i < row_end; i++)
     {
         // calculate y
         if (id < m)
@@ -207,56 +211,125 @@ __global__ void dtw_prefix_kernel(const double *X, const int start_row, const in
     }
 }
 
-void prefix_parallel(const double *X, const int start_row, const int end_row, const int n, const double *Y, const int m, double **D)
+double **prefix_parallel(const double *X, const int row_start, const int row_end, const int n, const double *Y, const int m)
 {
-    double *h_D;
-    double *d_X, *d_Y, *d_D;
-    double *d_x, *d_y;
-    // memory initialization and memcpy
-    h_D = (double *)malloc(n * m * sizeof(double));
-    for (int i = 0; i < n; i++)
-    {
-        memcpy(&(h_D[i * m]), D[i], m * sizeof(double));
-    }
+    double *h_D = array_init_1d(X, n, Y, m);
+    double *d_X;
+    double *d_Y;
+    double *d_D;
+    double *d_x;
+    double *d_y;
     cudaMalloc((void **)&d_X, n * sizeof(double));
     cudaMalloc((void **)&d_Y, m * sizeof(double));
     cudaMalloc((void **)&d_D, n * m * sizeof(double));
     cudaMalloc((void **)&d_x, m * sizeof(double));
     cudaMalloc((void **)&d_y, m * sizeof(double));
-
     cudaMemcpy(d_X, X, n * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Y, Y, m * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_D, h_D, n * m * sizeof(double), cudaMemcpyHostToDevice);
 
-    // call kernel function
-    int numBlocks = 1;
-    int threadsPerBlock = m;
-    size_t shmemBytes = m * sizeof(double);
-    dtw_prefix_kernel<<<numBlocks, threadsPerBlock, shmemBytes>>>(d_X, start_row, end_row, d_Y, m, d_D, d_x, d_y);
+    int block_num = 1;
+    int thread_num = m;
+    size_t shm_byte = m * sizeof(double);
+    dtw_prefix_kernel<<<block_num, thread_num, shm_byte>>>(d_X, row_start, row_end, d_Y, m, d_D, d_x, d_y);
 
-    // cuda synchronization
     cudaDeviceSynchronize();
 
-    // memcpy and memory free
     cudaMemcpy(h_D, d_D, n * m * sizeof(double), cudaMemcpyDeviceToHost);
+    double **D = new double *[n];
     for (int i = 0; i < n; i++)
     {
+        D[i] = new double[m];
         memcpy(D[i], &(h_D[i * m]), m * sizeof(double));
     }
+    delete[] h_D;
     cudaFree(d_X);
     cudaFree(d_Y);
     cudaFree(d_D);
     cudaFree(d_x);
     cudaFree(d_y);
-    free(h_D);
+    return D;
 }
 
-void prefix_sequential(const double *X, const int n, const double *Y, const int m, double **D)
+std::vector<float> prefix_parallel_benchmark(const double *X, const int row_start, const int row_end, const int n, const double *Y, const int m)
 {
+    int rounds = 100;
+    int warmup = 10;
+    int kernel_num = 1;
+    std::vector<float> total_ms(kernel_num, 0);
+
+    double *h_D = array_init_1d(X, n, Y, m);
+    double *d_X;
+    double *d_Y;
+    double *d_D;
+    double *d_x;
+    double *d_y;
+    cudaMalloc((void **)&d_X, n * sizeof(double));
+    cudaMalloc((void **)&d_Y, m * sizeof(double));
+    cudaMalloc((void **)&d_D, n * m * sizeof(double));
+    cudaMalloc((void **)&d_x, m * sizeof(double));
+    cudaMalloc((void **)&d_y, m * sizeof(double));
+    cudaMemcpy(d_X, X, n * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Y, Y, m * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_D, h_D, n * m * sizeof(double), cudaMemcpyHostToDevice);
+
+    // warmup
+    int block_num = 1;
+    int thread_num = m;
+    size_t shm_byte = m * sizeof(double);
+    for (int round = 0; round < warmup; round++)
+    {
+        dtw_prefix_kernel<<<block_num, thread_num, shm_byte>>>(d_X, row_start, row_end, d_Y, m, d_D, d_x, d_y);
+    }
+    cudaDeviceSynchronize();
+
+    cudaEvent_t start;
+    cudaEvent_t end;
+    cudaEventCreate(&start);
+    cudaEventCreate(&end);
+    for (int round = 0; round < rounds; round++)
+    {
+        cudaEventRecord(start);
+
+        dtw_prefix_kernel<<<block_num, thread_num, shm_byte>>>(d_X, row_start, row_end, d_Y, m, d_D, d_x, d_y);
+
+        cudaEventRecord(end);
+        cudaEventSynchronize(end);
+
+        float ms;
+        cudaEventElapsedTime(&ms, start, end);
+        total_ms[0] += ms;
+    }
+    for (int i = 0; i < kernel_num; i++)
+    {
+        total_ms[i] /= rounds;
+    }
+    cudaEventDestroy(start);
+    cudaEventDestroy(end);
+
+    // Skip copying data back
+    delete[] h_D;
+    cudaFree(d_X);
+    cudaFree(d_Y);
+    cudaFree(d_D);
+    cudaFree(d_x);
+    cudaFree(d_y);
+    return total_ms;
+}
+
+double **prefix_sequential(const double *X, const int n, const double *Y, const int m)
+{
+    double **D = array_init_2d(X, n, Y, m);
     prefix_sequential(X, 1, n, n, Y, m, D);
+    return D;
 }
 
-void prefix_parallel(const double *X, const int n, const double *Y, const int m, double **D)
+double **prefix_parallel(const double *X, const int n, const double *Y, const int m)
 {
-    prefix_parallel(X, 1, n, n, Y, m, D);
+    return prefix_parallel(X, 1, n, n, Y, m);
+}
+
+std::vector<float> prefix_parallel_benchmark(const double *X, const int n, const double *Y, const int m)
+{
+    return prefix_parallel_benchmark(X, 1, n, n, Y, m);
 }

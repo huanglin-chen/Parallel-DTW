@@ -3,8 +3,9 @@
 #include <sstream>
 #include <string>
 #include <algorithm>
-#include <limits>
 #include <chrono>
+#include <vector>
+#include <random>
 
 #include "simple.h"
 #include "diagonal.h"
@@ -15,9 +16,43 @@
 #define GREEN "\033[1;32m"
 #define RESET "\033[0m"
 
-typedef void (*dtw_algorithm)(const double *, const int, const double *, const int, double **);
+typedef double **(*dtw_algorithm)(const double *, const int, const double *, const int);
+typedef std::vector<float> (*dtw_algorithm_benchmark)(const double *, const int, const double *, const int);
 
-static double *read_sequence(int &sequence_num, int &sequence_length)
+double *array_init_1d(const double *X, const int n, const double *Y, const int m)
+{
+    double *h_D = new double[n * m];
+    h_D[0 * m + 0] = ED(X[0], Y[0]);
+    for (int i = 1; i < n; i++)
+    {
+        h_D[i * m + 0] = ED(X[i], Y[0]) + h_D[(i - 1) * m + 0];
+    }
+    for (int j = 1; j < m; j++)
+    {
+        h_D[0 * m + j] = ED(X[0], Y[j]) + h_D[0 * m + j - 1];
+    }
+    return h_D;
+}
+double **array_init_2d(const double *X, const int n, const double *Y, const int m)
+{
+    double **D = new double *[n];
+    for (int i = 0; i < n; i++)
+    {
+        D[i] = new double[m];
+    }
+    D[0][0] = ED(X[0], Y[0]);
+    for (int i = 1; i < n; i++)
+    {
+        D[i][0] = D[i - 1][0] + ED(X[i], Y[0]);
+    }
+    for (int j = 1; j < m; j++)
+    {
+        D[0][j] = D[0][j - 1] + ED(X[0], Y[j]);
+    }
+    return D;
+}
+
+double *read_sequence(int &sequence_num, int &sequence_length)
 {
     std::ifstream dataset("UCR_TS_Archive_2015/StarLightCurves/StarLightCurves_TRAIN");
     if (!dataset.is_open())
@@ -56,58 +91,31 @@ static double *read_sequence(int &sequence_num, int &sequence_length)
     return sequences;
 }
 
-static void verify(int rounds, std::string algorithm_name, dtw_algorithm algorithm, double *sequences, const int sequence_num, const int sequence_length)
+void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequences, const int sequence_num, const int sequence_length)
 {
+    int rounds = 100;
     bool pass = true;
     int n = sequence_length;
     int m = sequence_length;
 
-    double **D1 = new double *[n];
-    double **D2 = new double *[n];
-    for (int i = 0; i < n; i++)
-    {
-        D1[i] = new double[m];
-        D2[i] = new double[m];
-    }
-
-    for (int round = 0; round < rounds; round++)
+    for (int round = 0; round < rounds && pass; round++)
     {
         double *X = &sequences[(round % sequence_num) * sequence_length];
         double *Y = &sequences[((round + 1) % sequence_num) * sequence_length];
-        // Initialize the cost matrix
-        D1[0][0] = ED(X[0], Y[0]);
-        for (int i = 1; i < n; i++)
-        {
-            D1[i][0] = D1[i - 1][0] + ED(X[i], Y[0]);
-        }
-        for (int j = 1; j < m; j++)
-        {
-            D1[0][j] = D1[0][j - 1] + ED(X[0], Y[j]);
-        }
-        for (int i = 1; i < n; i++)
-        {
-            for (int j = 1; j < m; j++)
-            {
-                D1[i][j] = std::numeric_limits<double>::max();
-            }
-        }
-        for (int i = 0; i < n; i++)
-        {
-            std::copy(D1[i], D1[i] + m, D2[i]);
-        }
 
         // Compare the algorithm with simple DTW algorithm
-        simple_sequential(X, n, Y, m, D1);
-        algorithm(X, n, Y, m, D2);
+        double **D1 = simple_sequential(X, n, Y, m);
+        double **D2 = algorithm(X, n, Y, m);
 
         // verify the result
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n && pass; i++)
         {
-            for (int j = 0; j < m; j++)
+            for (int j = 0; j < m && pass; j++)
             {
-                if (std::abs(D1[i][j] - D2[i][j]) > 1e-4)
-                {
+                pass = std::abs(D1[i][j] - D2[i][j]) <= 1e-4;
 #ifdef DEBUG
+                if (!pass)
+                {
                     std::cout << "Failed at: [" << i << ", " << j << "]" << std::endl;
                     for (int l = 0; l < 10; l++)
                     {
@@ -119,23 +127,18 @@ static void verify(int rounds, std::string algorithm_name, dtw_algorithm algorit
                         std::cout << D2[i][l] << " ";
                     }
                     std::cout << std::endl;
-#endif
-                    pass = false;
-                    goto cleanup;
                 }
+#endif
             }
         }
+        for (int i = 0; i < n; i++)
+        {
+            delete[] D1[i];
+            delete[] D2[i];
+        }
+        delete[] D1;
+        delete[] D2;
     }
-
-cleanup:
-    for (int i = 0; i < n; i++)
-    {
-        delete[] D1[i];
-        delete[] D2[i];
-    }
-    delete[] D1;
-    delete[] D2;
-
     if (pass)
     {
         std::cout << GREEN << "[ PASS ] " << algorithm_name << RESET << std::endl;
@@ -146,61 +149,67 @@ cleanup:
     }
 }
 
-static double cost_matrix_benchmark(const int rounds, dtw_algorithm algorithm, double *sequences, const int sequence_num, const int sequence_length)
+void cost_matrix_benchmark(std::string algorithm_name, dtw_algorithm algorithm, double *sequences, const int sequence_num, const int sequence_length)
 {
-    if (rounds <= 0)
-    {
-        return 0;
-    }
-    double ret = 0;
+    int rounds = 1000;
+    int warmup = 10;
+    double total_ms = 0;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, sequence_num);
     int n = sequence_length;
     int m = sequence_length;
 
-    double **D = new double *[n];
-    for (int i = 0; i < n; i++)
+    for (int round = 0; round < warmup; round++)
     {
-        D[i] = new double[m];
+        double *X = &sequences[dist(gen) * sequence_length];
+        double *Y = &sequences[dist(gen) * sequence_length];
+        double **D = algorithm(X, n, Y, m);
+        for (int i = 0; i < n; i++)
+        {
+            delete[] D[i];
+        }
+        delete[] D;
     }
-
-    int warmup = rounds / 10;
     for (int round = 0; round < rounds; round++)
     {
-        double *X = &sequences[(round % sequence_num) * sequence_length];
-        double *Y = &sequences[((round + 1) % sequence_num) * sequence_length];
-        // Initialize the cost matrix
-        D[0][0] = ED(X[0], Y[0]);
-        for (int i = 1; i < n; i++)
-        {
-            D[i][0] = D[i - 1][0] + ED(X[i], Y[0]);
-        }
-        for (int j = 1; j < m; j++)
-        {
-            D[0][j] = D[0][j - 1] + ED(X[0], Y[j]);
-        }
-        for (int i = 1; i < n; i++)
-        {
-            for (int j = 1; j < m; j++)
-            {
-                D[i][j] = std::numeric_limits<double>::max();
-            }
-        }
-
+        double *X = &sequences[dist(gen) * sequence_length];
+        double *Y = &sequences[dist(gen) * sequence_length];
         auto start = std::chrono::steady_clock::now();
 
-        algorithm(X, n, Y, m, D);
+        double **D = algorithm(X, n, Y, m);
 
         auto end = std::chrono::steady_clock::now();
-        if (round >= warmup)
-            ret += std::chrono::duration<double, std::milli>(end - start).count();
+        total_ms += std::chrono::duration<double, std::milli>(end - start).count();
+
+        for (int i = 0; i < n; i++)
+        {
+            delete[] D[i];
+        }
+        delete[] D;
     }
 
-    for (int i = 0; i < n; i++)
+    std::cout << "[ Cost Matrix ] " << algorithm_name << ": \t" << total_ms / rounds << " ms." << std::endl;
+}
+
+void kernel_benchmark(std::string algorithm_name, dtw_algorithm_benchmark algorithm, double *sequences, const int sequence_num, const int sequence_length)
+{
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, sequence_num);
+    int n = sequence_length;
+    int m = sequence_length;
+    double *X = &sequences[dist(gen) * sequence_length];
+    double *Y = &sequences[dist(gen) * sequence_length];
+    std::vector<float> total_ms = algorithm(X, n, Y, m);
+
+    std::cout << "[ Kernel ] " << algorithm_name << ": \t";
+    for (float ms : total_ms)
     {
-        delete[] D[i];
+        std::cout << ms << " ";
     }
-    delete[] D;
-
-    return ret / (rounds - warmup);
+    std::cout << "ms." << std::endl;
 }
 
 int main()
@@ -209,13 +218,31 @@ int main()
     int sequence_length = 0;
     double *sequences = read_sequence(sequence_num, sequence_length);
 
-    int rounds = 1000;
-    verify(rounds, "diagonal_sequential", diagonal_sequential, sequences, sequence_num, sequence_length);
-    verify(rounds, "diagonal_parallel", diagonal_parallel, sequences, sequence_num, sequence_length);
-    verify(rounds, "prefix_sequential", prefix_sequential, sequences, sequence_num, sequence_length);
-    verify(rounds, "prefix_parallel", prefix_parallel, sequences, sequence_num, sequence_length);
-    verify(rounds, "hybrid_sequential", hybrid_sequential, sequences, sequence_num, sequence_length);
-    verify(rounds, "hybrid_parallel", hybrid_parallel, sequences, sequence_num, sequence_length);
+    std::vector<std::pair<std::string, dtw_algorithm>> test_case1{
+        {"simple_sequential", simple_sequential},
+        {"diagonal_sequential", diagonal_sequential},
+        {"diagonal_parallel", diagonal_parallel},
+        {"prefix_sequential", prefix_sequential},
+        {"prefix_parallel", prefix_parallel},
+        {"hybrid_sequential", hybrid_sequential},
+        {"hybrid_parallel", hybrid_parallel}};
+    std::vector<std::pair<std::string, dtw_algorithm_benchmark>> test_case2{
+        {"diagonal_parallel", diagonal_parallel_benchmark},
+        {"prefix_parallel", prefix_parallel_benchmark},
+        {"hybrid_parallel", hybrid_parallel_benchmark}};
+
+    for (int i = 1; i < 7; i++)
+    {
+        verify(test_case1[i].first, test_case1[i].second, sequences, sequence_num, sequence_length);
+    }
+    for (int i = 0; i < 7; i++)
+    {
+        cost_matrix_benchmark(test_case1[i].first, test_case1[i].second, sequences, sequence_num, sequence_length);
+    }
+    for (int i = 0; i < 3; i++)
+    {
+        kernel_benchmark(test_case2[i].first, test_case2[i].second, sequences, sequence_num, sequence_length);
+    }
 
     delete[] sequences;
     return 0;

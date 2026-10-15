@@ -1,35 +1,26 @@
 CXX = g++
 NVCC = nvcc
-CXXFLAGS = -Wall
-NVCCFLAGS = -rdc=true
+CXXFLAGS = -Wall -Wextra -O2
+NVCCFLAGS = -rdc=true -O2
 
 TARGET = src/main
 OBJS = src/main.o src/simple.o src/diagonal.o src/prefix.o src/hybrid.o
 
+.PHONY: all run clean
+
 all: $(TARGET)
 
-run:
+run: $(TARGET)
 	$(TARGET)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
-src/main.o: src/main.cpp
+src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-src/simple.o: src/simple.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-src/diagonal.o: src/diagonal.cu
+src/%.o: src/%.cu
 	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
-
-src/prefix.o: src/prefix.cu
-	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
-
-src/hybrid.o: src/hybrid.cu
-	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
-
-.PHONY: clean
-
-clean:
-	rm -f $(OBJS) $(TARGET)

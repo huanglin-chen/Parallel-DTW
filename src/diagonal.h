@@ -3,7 +3,9 @@
 
 #define ED(a, b) ((a) - (b)) * ((a) - (b))
 
-void diagonal_sequential(const double *, const int, const double *, const int, double **);
-void diagonal_parallel(const double *, const int, const double *, const int, double **);
+double **diagonal_sequential(const double *, const int, const double *, const int);
+double **diagonal_parallel(const double *, const int, const double *, const int);
+
+std::vector<float> diagonal_parallel_benchmark(const double *, const int, const double *, const int);
 
 #endif
