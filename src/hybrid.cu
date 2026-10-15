@@ -126,7 +126,7 @@ double **hybrid_parallel(const double *X, const int n, const double *Y, const in
 
 std::vector<float> hybrid_parallel_benchmark(const double *X, const int n, const double *Y, const int m)
 {
-    int rounds = 100;
+    int rounds = 1000;
     int warmup = 10;
     int kernel_num = 2;
     std::vector<float> total_ms(kernel_num, 0);
@@ -174,7 +174,6 @@ std::vector<float> hybrid_parallel_benchmark(const double *X, const int n, const
         dtw_hybrid_diag_kernel<<<block_num, thread_num>>>(d_X, n, d_Y, m, d_D);
 
         cudaEventRecord(start2);
-        cudaEventSynchronize(start2);
 
         thread_num = m;
         dtw_prefix_kernel<<<block_num, thread_num, shm_byte>>>(d_X, row_start, n, d_Y, m, d_D, d_x, d_y);

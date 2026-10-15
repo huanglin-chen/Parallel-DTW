@@ -253,7 +253,7 @@ double **prefix_parallel(const double *X, const int row_start, const int row_end
 
 std::vector<float> prefix_parallel_benchmark(const double *X, const int row_start, const int row_end, const int n, const double *Y, const int m)
 {
-    int rounds = 100;
+    int rounds = 1000;
     int warmup = 10;
     int kernel_num = 1;
     std::vector<float> total_ms(kernel_num, 0);

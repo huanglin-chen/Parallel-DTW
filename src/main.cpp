@@ -93,7 +93,7 @@ double *read_sequence(int &sequence_num, int &sequence_length)
 
 void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequences, const int sequence_num, const int sequence_length)
 {
-    int rounds = 100;
+    int rounds = 1000;
     bool pass = true;
     int n = sequence_length;
     int m = sequence_length;
@@ -112,7 +112,7 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
         {
             for (int j = 0; j < m && pass; j++)
             {
-                pass = std::abs(D1[i][j] - D2[i][j]) <= 1e-4;
+                pass = pass && (std::abs(D1[i][j] - D2[i][j]) <= 1e-4);
 #ifdef DEBUG
                 if (!pass)
                 {
@@ -157,7 +157,7 @@ void cost_matrix_benchmark(std::string algorithm_name, dtw_algorithm algorithm, 
 
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, sequence_num);
+    std::uniform_int_distribution<int> dist(0, sequence_num - 1);
     int n = sequence_length;
     int m = sequence_length;
 
@@ -197,7 +197,7 @@ void kernel_benchmark(std::string algorithm_name, dtw_algorithm_benchmark algori
 {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, sequence_num);
+    std::uniform_int_distribution<int> dist(0, sequence_num - 1);
     int n = sequence_length;
     int m = sequence_length;
     double *X = &sequences[dist(gen) * sequence_length];
