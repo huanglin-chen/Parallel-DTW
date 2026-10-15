@@ -3,6 +3,6 @@
 
 #define ED(a, b) ((a) - (b)) * ((a) - (b))
 
-void simple_sequential(const double *, const int, const double *, const int, double **);
+double **simple_sequential(const double *, const int, const double *, const int);
 
 #endif
