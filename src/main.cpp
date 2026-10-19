@@ -6,6 +6,9 @@
 #include <chrono>
 #include <vector>
 #include <random>
+#ifdef DEBUG
+#include <iomanip>
+#endif
 
 #include "simple.h"
 #include "diagonal.h"
@@ -18,6 +21,7 @@
 
 typedef double **(*dtw_algorithm)(const double *, const int, const double *, const int);
 typedef std::vector<float> (*dtw_algorithm_benchmark)(const double *, const int, const double *, const int);
+typedef std::vector<double **> (*dtw_algorithm_stream)(std::vector<std::pair<int, int>> &, double *, int , int, int);
 
 double *array_init_1d(const double *X, const int n, const double *Y, const int m)
 {
@@ -98,6 +102,9 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
     int n = sequence_length;
     int m = sequence_length;
 
+#ifdef DEBUG
+    double max_e = 0;
+#endif
     for (int round = 0; round < rounds && pass; round++)
     {
         double *X = &sequences[(round % sequence_num) * sequence_length];
@@ -114,6 +121,7 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
             {
                 pass = pass && (std::abs(D1[i][j] - D2[i][j]) <= 1e-4);
 #ifdef DEBUG
+                max_e = std::max(max_e, std::abs(D1[i][j] - D2[i][j]));
                 if (!pass)
                 {
                     std::cout << "Failed at: [" << i << ", " << j << "]" << std::endl;
@@ -141,7 +149,11 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
     }
     if (pass)
     {
+#ifdef DEBUG
+        std::cout << GREEN << "[ PASS ] " << algorithm_name << RESET << " (error <= " << max_e << ")" << std::endl;
+#else
         std::cout << GREEN << "[ PASS ] " << algorithm_name << RESET << std::endl;
+#endif
     }
     else
     {
@@ -210,6 +222,52 @@ void kernel_benchmark(std::string algorithm_name, dtw_algorithm_benchmark algori
         std::cout << ms << " ";
     }
     std::cout << "ms." << std::endl;
+}
+
+void stream_benchmark(std::string algorithm_name, dtw_algorithm_stream algorithm, double *sequences, const int sequence_num, const int sequence_length)
+{
+    int stream_num = 16;
+    int rounds = 100;
+    int warmup = 10;
+
+    std::vector<std::pair<int, int>> pairs;
+    for(int round = 0; round < warmup; round++)
+    {
+        pairs.push_back({round % sequence_num, (round + 1) % sequence_num});
+    }
+
+    std::vector<double **> Ds = algorithm(pairs, sequences, sequence_num, sequence_length, stream_num);
+    for(int i = 0; i < warmup; i++)
+    {
+        for (int j = 0; j < sequence_length; j++)
+        {
+            delete[] Ds[i][j];
+        }
+        delete[] Ds[i];
+    }
+
+    for(int round = warmup; round < rounds; round++)
+    {
+        pairs.push_back({round % sequence_num, (round + 1) % sequence_num});
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    
+    Ds = algorithm(pairs, sequences, sequence_num, sequence_length, stream_num);
+
+    auto end = std::chrono::steady_clock::now();
+    double ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    for(int i = 0; i < rounds; i++)
+    {
+        for (int j = 0; j < sequence_length; j++)
+        {
+            delete[] Ds[i][j];
+        }
+        delete[] Ds[i];
+    }
+
+    std::cout << "[ Stream ] " << algorithm_name << ": \t" << ms / rounds << " ms for " << stream_num << " streams." << std::endl;
 }
 
 int main()
