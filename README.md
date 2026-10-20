@@ -61,6 +61,17 @@ To remove generated build files, run:
 make clean
 ```
 
+## Benchmarks
+
+The project includes the following benchmarks:
+
+- **Cost Matrix**: End-to-end execution time of computing the cost matrix using CPU sequential and GPU parallel implementations.
+
+- **Kernel**: execution time of CUDA kernels, excluding memory allocation and data transfers.
+
+- **Stream**: End-to-end execution time of computing the cost matrix per sequence pair using CUDA Streams.
+
+
 ## References
 
 - Xiao, L., Zheng, Y., Tang, W., Yao, G., & Ruan, L. (2013). Parallelizing Dynamic Time Warping Algorithm Using Prefix Computations on GPU. IEEE HPCC/EUC 2013. https://doi.org/10.1109/HPCC.and.EUC.2013.50
