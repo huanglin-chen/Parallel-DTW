@@ -99,27 +99,31 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
         // verify the result
         for (int i = 0; i < n * m; i++)
         {
-            if (std::abs(D1[i] - D2[i]) > 1e-4)
+            if (!std::isfinite(D1[i]) || !std::isfinite(D2[i]) || std::abs(D1[i] - D2[i]) > 1e-4)
             {
-                pass = false;
-                break;
 #ifdef DEBUG
                 max_e = std::max(max_e, std::abs(D1[i] - D2[i]));
-                if (!pass)
+                int row = i / m;
+                int col = i % m;
+                std::cout << "Failed at: [" << row << ", " << col << "]" << std::endl;
+                for(int j = std::max(0, col - 5); j < std::min(col + 5, m); j++)
                 {
-                    std::cout << "Failed at: [" << i / m << ", " << i % m << "]" << std::endl;
-                    for (int j = std::max(0, i - 5); j < std::min(n * m, i + 5); j++)
-                    {
-                        std::cout << D1[j] << " ";
-                    }
-                    std::cout << std::endl;
-                    for (int j = std::max(0, i - 5); j < std::min(n * m, i + 5); j++)
-                    {
-                        std::cout << D2[j] << " ";
-                    }
-                    std::cout << std::endl;
+                    std::cout << j << "\t";
                 }
+                std::cout << std::endl;
+                for(int j = std::max(0, col - 5); j < std::min(col + 5, m); j++)
+                {
+                    std::cout << D1[row * m + j] << " ";
+                }
+                std::cout << std::endl;
+                for(int j = std::max(0, col - 5); j < std::min(col + 5, m); j++)
+                {
+                    std::cout << D2[row * m + j] << " ";
+                }
+                std::cout << std::endl;
 #endif
+                pass = false;
+                break;
             }
         }
         delete[] D1;
