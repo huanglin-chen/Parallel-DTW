@@ -3,14 +3,14 @@
 #include <vector>
 #include "hybrid.h"
 
-extern void prefix_sequential(const double *, const int, const int, const int, const double *, const int, double **);
+extern void prefix_sequential(const double *, const int, const int, const int, const double *, const int, double *);
 extern __global__ void dtw_prefix_kernel(const double *, const int, const int, const double *, const int, double *, double *, double *);
-extern double *array_init_1d(const double *, const int, const double *, const int);
-extern double **array_init_2d(const double *, const int, const double *, const int);
+extern __global__ void array_init_kernel(const double *, const int, const double *, const int, double *);
+extern double *array_init(const double *, const int, const double *, const int);
 
-double **hybrid_sequential(const double *X, const int n, const double *Y, const int m)
+double *hybrid_sequential(const double *X, const int n, const double *Y, const int m)
 {
-    double **D = array_init_2d(X, n, Y, m);
+    double *D = array_init(X, n, Y, m);
     // Diagonal section
     const int row_start = 1;
     const int row_end = WIDTH * ((n - 1) / WIDTH);
@@ -30,7 +30,7 @@ double **hybrid_sequential(const double *X, const int n, const double *Y, const 
         {
             if (row_start <= j[k] && i[k] <= row_end)
             {
-                D[i[k]][j[k]] = ED(X[i[k]], Y[j[k]]) + std::min({D[i[k] - 1][j[k]], D[i[k]][j[k] - 1], D[i[k] - 1][j[k] - 1]});
+                D[i[k] * m + j[k]] = ED(X[i[k]], Y[j[k]]) + std::min(D[(i[k] - 1) * m + j[k]], std::min(D[i[k] * m + j[k] - 1], D[(i[k] - 1) * m + j[k] - 1]));
             }
             if (j[k] == m - 1)
             {
@@ -78,9 +78,9 @@ __global__ void dtw_hybrid_diag_kernel(const double *X, const int n, const doubl
     }
 }
 
-double **hybrid_parallel(const double *X, const int n, const double *Y, const int m)
+double *hybrid_parallel(const double *X, const int n, const double *Y, const int m)
 {
-    double *h_D = array_init_1d(X, n, Y, m);
+    double *h_D = array_init(X, n, Y, m);
     double *d_X;
     double *d_Y;
     double *d_D;
@@ -109,19 +109,12 @@ double **hybrid_parallel(const double *X, const int n, const double *Y, const in
     cudaDeviceSynchronize();
 
     cudaMemcpy(h_D, d_D, n * m * sizeof(double), cudaMemcpyDeviceToHost);
-    double **D = new double *[n];
-    for (int i = 0; i < n; i++)
-    {
-        D[i] = new double[m];
-        memcpy(D[i], &h_D[i * m], m * sizeof(double));
-    }
-    delete[] h_D;
     cudaFree(d_X);
     cudaFree(d_Y);
     cudaFree(d_D);
     cudaFree(d_x);
     cudaFree(d_y);
-    return D;
+    return h_D;
 }
 
 std::vector<float> hybrid_parallel_benchmark(const double *X, const int n, const double *Y, const int m)
@@ -131,7 +124,7 @@ std::vector<float> hybrid_parallel_benchmark(const double *X, const int n, const
     int kernel_num = 2;
     std::vector<float> total_ms(kernel_num, 0);
 
-    double *h_D = array_init_1d(X, n, Y, m);
+    double *h_D = array_init(X, n, Y, m);
     double *d_X;
     double *d_Y;
     double *d_D;
@@ -202,4 +195,91 @@ std::vector<float> hybrid_parallel_benchmark(const double *X, const int n, const
     cudaFree(d_x);
     cudaFree(d_y);
     return total_ms;
+}
+
+double **hybrid_parallel_stream(
+    std::vector<std::pair<int, int>> &pairs,
+    double *sequences,
+    int sequence_num,
+    int sequence_length,
+    int stream_num)
+{
+    int pair_num = pairs.size();
+    // Copy the whole dataset to gpu
+    double *d_sequences;
+    cudaMalloc((void **)&d_sequences, sequence_num * sequence_length * sizeof(double));
+    cudaMemcpy(d_sequences, sequences, sequence_num * sequence_length * sizeof(double), cudaMemcpyHostToDevice);
+    // Allocate d_D, d_x, d_y for each stream
+    double **d_Ds = new double *[stream_num];
+    double **d_xs = new double *[stream_num];
+    double **d_ys = new double *[stream_num];
+    for (int s = 0; s < stream_num; s++)
+    {
+        cudaMalloc((void **)&d_Ds[s], sequence_length * sequence_length * sizeof(double));
+        cudaMalloc((void **)&d_xs[s], sequence_length * sizeof(double));
+        cudaMalloc((void **)&d_ys[s], sequence_length * sizeof(double));
+    }
+    // Allocate h_D for each pair on pinned memory
+    double **h_Ds = new double *[pair_num];
+    for (int i = 0; i < pair_num; i++)
+    {
+        h_Ds[i] = new double[sequence_length * sequence_length];
+        cudaHostRegister(h_Ds[i], sequence_length * sequence_length * sizeof(double), cudaHostRegisterDefault);
+    }
+
+    // Create cuda streams
+    std::vector<cudaStream_t> streams(stream_num);
+    for (int s = 0; s < stream_num; s++)
+    {
+        cudaStreamCreate(&streams[s]);
+    }
+
+    // Launch kernels
+    int block_num = 1;
+    int thread_num = WIDTH;
+    size_t shm_byte = sequence_length * sizeof(double);
+    for(int i = 0; i < pair_num; i++)
+    {
+        int s = i % stream_num;
+        double *d_X = &d_sequences[pairs[i].first * sequence_length];
+        double *d_Y = &d_sequences[pairs[i].second * sequence_length];
+        double *d_x = d_xs[s];
+        double *d_y = d_ys[s];
+        double *h_D = h_Ds[i];
+        double *d_D = d_Ds[s];
+        array_init_kernel<<<1, 2, 0, streams[s]>>>(d_X, sequence_length, d_Y, sequence_length, d_D);
+        dtw_hybrid_diag_kernel<<<block_num, thread_num, 0, streams[s]>>>(d_X, sequence_length, d_Y, sequence_length, d_D);
+        
+        thread_num = sequence_length;
+        int row_start = WIDTH * ((sequence_length - 1) / WIDTH) + 1;
+        dtw_prefix_kernel<<<block_num, thread_num, shm_byte, streams[s]>>>(d_X, row_start, sequence_length, d_Y, sequence_length, d_D, d_x, d_y);
+        
+        cudaMemcpyAsync(h_D, d_D, sequence_length * sequence_length * sizeof(double), cudaMemcpyDeviceToHost, streams[s]);
+    }
+    for (int s = 0; s < stream_num; s++)
+    {
+        cudaStreamSynchronize(streams[s]);
+    }
+
+    // Destroy streams
+    for (int s = 0; s < stream_num; s++)
+    {
+        cudaStreamDestroy(streams[s]);
+    }
+
+    cudaFree(d_sequences);
+    for (int s = 0; s < stream_num; s++)
+    {
+        cudaFree(d_Ds[s]);
+        cudaFree(d_xs[s]);
+        cudaFree(d_ys[s]);
+    }
+    delete[] d_Ds;
+    delete[] d_xs;
+    delete[] d_ys;
+    for (int i = 0; i < pair_num; i++)
+    {
+        cudaHostUnregister(h_Ds[i]);
+    }
+    return h_Ds;
 }

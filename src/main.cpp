@@ -19,41 +19,23 @@
 #define GREEN "\033[1;32m"
 #define RESET "\033[0m"
 
-typedef double **(*dtw_algorithm)(const double *, const int, const double *, const int);
+typedef double *(*dtw_algorithm)(const double *, const int, const double *, const int);
 typedef std::vector<float> (*dtw_algorithm_benchmark)(const double *, const int, const double *, const int);
-typedef std::vector<double **> (*dtw_algorithm_stream)(std::vector<std::pair<int, int>> &, double *, int , int, int);
+typedef double **(*dtw_algorithm_stream)(std::vector<std::pair<int, int>> &, double *, int, int, int);
 
-double *array_init_1d(const double *X, const int n, const double *Y, const int m)
+double *array_init(const double *X, const int n, const double *Y, const int m)
 {
     double *h_D = new double[n * m];
-    h_D[0 * m + 0] = ED(X[0], Y[0]);
+    h_D[0] = ED(X[0], Y[0]);
     for (int i = 1; i < n; i++)
     {
-        h_D[i * m + 0] = ED(X[i], Y[0]) + h_D[(i - 1) * m + 0];
+        h_D[i * m] = ED(X[i], Y[0]) + h_D[(i - 1) * m];
     }
     for (int j = 1; j < m; j++)
     {
-        h_D[0 * m + j] = ED(X[0], Y[j]) + h_D[0 * m + j - 1];
+        h_D[j] = ED(X[0], Y[j]) + h_D[j - 1];
     }
     return h_D;
-}
-double **array_init_2d(const double *X, const int n, const double *Y, const int m)
-{
-    double **D = new double *[n];
-    for (int i = 0; i < n; i++)
-    {
-        D[i] = new double[m];
-    }
-    D[0][0] = ED(X[0], Y[0]);
-    for (int i = 1; i < n; i++)
-    {
-        D[i][0] = D[i - 1][0] + ED(X[i], Y[0]);
-    }
-    for (int j = 1; j < m; j++)
-    {
-        D[0][j] = D[0][j - 1] + ED(X[0], Y[j]);
-    }
-    return D;
 }
 
 double *read_sequence(int &sequence_num, int &sequence_length)
@@ -107,42 +89,38 @@ void verify(std::string algorithm_name, dtw_algorithm algorithm, double *sequenc
 #endif
     for (int round = 0; round < rounds && pass; round++)
     {
-        double *X = &sequences[(round % sequence_num) * sequence_length];
-        double *Y = &sequences[((round + 1) % sequence_num) * sequence_length];
+        double *X = &sequences[(round % sequence_num) * n];
+        double *Y = &sequences[((round + 1) % sequence_num) * m];
 
         // Compare the algorithm with simple DTW algorithm
-        double **D1 = simple_sequential(X, n, Y, m);
-        double **D2 = algorithm(X, n, Y, m);
+        double *D1 = simple_sequential(X, n, Y, m);
+        double *D2 = algorithm(X, n, Y, m);
 
         // verify the result
-        for (int i = 0; i < n && pass; i++)
+        for (int i = 0; i < n * m; i++)
         {
-            for (int j = 0; j < m && pass; j++)
+            if (std::abs(D1[i] - D2[i]) > 1e-4)
             {
-                pass = pass && (std::abs(D1[i][j] - D2[i][j]) <= 1e-4);
+                pass = false;
+                break;
 #ifdef DEBUG
-                max_e = std::max(max_e, std::abs(D1[i][j] - D2[i][j]));
+                max_e = std::max(max_e, std::abs(D1[i] - D2[i]));
                 if (!pass)
                 {
-                    std::cout << "Failed at: [" << i << ", " << j << "]" << std::endl;
-                    for (int l = 0; l < 10; l++)
+                    std::cout << "Failed at: [" << i / m << ", " << i % m << "]" << std::endl;
+                    for (int j = std::max(0, i - 5); j < std::min(n * m, i + 5); j++)
                     {
-                        std::cout << D1[i][l] << " ";
+                        std::cout << D1[j] << " ";
                     }
                     std::cout << std::endl;
-                    for (int l = 0; l < 10; l++)
+                    for (int j = std::max(0, i - 5); j < std::min(n * m, i + 5); j++)
                     {
-                        std::cout << D2[i][l] << " ";
+                        std::cout << D2[j] << " ";
                     }
                     std::cout << std::endl;
                 }
 #endif
             }
-        }
-        for (int i = 0; i < n; i++)
-        {
-            delete[] D1[i];
-            delete[] D2[i];
         }
         delete[] D1;
         delete[] D2;
@@ -175,30 +153,22 @@ void cost_matrix_benchmark(std::string algorithm_name, dtw_algorithm algorithm, 
 
     for (int round = 0; round < warmup; round++)
     {
-        double *X = &sequences[dist(gen) * sequence_length];
-        double *Y = &sequences[dist(gen) * sequence_length];
-        double **D = algorithm(X, n, Y, m);
-        for (int i = 0; i < n; i++)
-        {
-            delete[] D[i];
-        }
+        double *X = &sequences[dist(gen) * n];
+        double *Y = &sequences[dist(gen) * m];
+        double *D = algorithm(X, n, Y, m);
         delete[] D;
     }
     for (int round = 0; round < rounds; round++)
     {
-        double *X = &sequences[dist(gen) * sequence_length];
-        double *Y = &sequences[dist(gen) * sequence_length];
+        double *X = &sequences[dist(gen) * n];
+        double *Y = &sequences[dist(gen) * m];
         auto start = std::chrono::steady_clock::now();
 
-        double **D = algorithm(X, n, Y, m);
+        double *D = algorithm(X, n, Y, m);
 
         auto end = std::chrono::steady_clock::now();
         total_ms += std::chrono::duration<double, std::milli>(end - start).count();
 
-        for (int i = 0; i < n; i++)
-        {
-            delete[] D[i];
-        }
         delete[] D;
     }
 
@@ -212,8 +182,8 @@ void kernel_benchmark(std::string algorithm_name, dtw_algorithm_benchmark algori
     std::uniform_int_distribution<int> dist(0, sequence_num - 1);
     int n = sequence_length;
     int m = sequence_length;
-    double *X = &sequences[dist(gen) * sequence_length];
-    double *Y = &sequences[dist(gen) * sequence_length];
+    double *X = &sequences[dist(gen) * n];
+    double *Y = &sequences[dist(gen) * m];
     std::vector<float> total_ms = algorithm(X, n, Y, m);
 
     std::cout << "[ Kernel ] " << algorithm_name << ": \t";
@@ -227,45 +197,39 @@ void kernel_benchmark(std::string algorithm_name, dtw_algorithm_benchmark algori
 void stream_benchmark(std::string algorithm_name, dtw_algorithm_stream algorithm, double *sequences, const int sequence_num, const int sequence_length)
 {
     int stream_num = 16;
-    int rounds = 100;
+    int rounds = 1000;
     int warmup = 10;
 
     std::vector<std::pair<int, int>> pairs;
-    for(int round = 0; round < warmup; round++)
+    for (int round = 0; round < warmup; round++)
     {
         pairs.push_back({round % sequence_num, (round + 1) % sequence_num});
     }
 
-    std::vector<double **> Ds = algorithm(pairs, sequences, sequence_num, sequence_length, stream_num);
-    for(int i = 0; i < warmup; i++)
+    double **Ds = algorithm(pairs, sequences, sequence_num, sequence_length, stream_num);
+    for (int i = 0; i < warmup; i++)
     {
-        for (int j = 0; j < sequence_length; j++)
-        {
-            delete[] Ds[i][j];
-        }
         delete[] Ds[i];
     }
+    delete[] Ds;
 
-    for(int round = warmup; round < rounds; round++)
+    for (int round = warmup; round < rounds; round++)
     {
         pairs.push_back({round % sequence_num, (round + 1) % sequence_num});
     }
 
     auto start = std::chrono::steady_clock::now();
-    
+
     Ds = algorithm(pairs, sequences, sequence_num, sequence_length, stream_num);
 
     auto end = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    for(int i = 0; i < rounds; i++)
+    for (int i = 0; i < rounds; i++)
     {
-        for (int j = 0; j < sequence_length; j++)
-        {
-            delete[] Ds[i][j];
-        }
         delete[] Ds[i];
     }
+    delete[] Ds;
 
     std::cout << "[ Stream ] " << algorithm_name << ": \t" << ms / rounds << " ms for " << stream_num << " streams." << std::endl;
 }
@@ -285,9 +249,13 @@ int main()
         {"hybrid_sequential", hybrid_sequential},
         {"hybrid_parallel", hybrid_parallel}};
     std::vector<std::pair<std::string, dtw_algorithm_benchmark>> test_case2{
-        {"diagonal_parallel", diagonal_parallel_benchmark},
-        {"prefix_parallel", prefix_parallel_benchmark},
-        {"hybrid_parallel", hybrid_parallel_benchmark}};
+        {"diagonal", diagonal_parallel_benchmark},
+        {"prefix", prefix_parallel_benchmark},
+        {"hybrid", hybrid_parallel_benchmark}};
+    std::vector<std::pair<std::string, dtw_algorithm_stream>> test_case3{
+        {"diagonal", diagonal_parallel_stream},
+        {"prefix", prefix_parallel_stream},
+        {"hybrid", hybrid_parallel_stream}};
 
     for (int i = 1; i < 7; i++)
     {
@@ -300,6 +268,10 @@ int main()
     for (int i = 0; i < 3; i++)
     {
         kernel_benchmark(test_case2[i].first, test_case2[i].second, sequences, sequence_num, sequence_length);
+    }
+    for (int i = 0; i < 3; i++)
+    {
+        stream_benchmark(test_case3[i].first, test_case3[i].second, sequences, sequence_num, sequence_length);
     }
 
     delete[] sequences;

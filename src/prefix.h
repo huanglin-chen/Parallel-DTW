@@ -3,9 +3,9 @@
 
 #define ED(a, b) ((a) - (b)) * ((a) - (b))
 
-double **prefix_sequential(const double *, const int, const double *, const int);
-double **prefix_parallel(const double *, const int, const double *, const int);
+double *prefix_sequential(const double *, const int, const double *, const int);
+double *prefix_parallel(const double *, const int, const double *, const int);
 
 std::vector<float> prefix_parallel_benchmark(const double *, const int, const double *, const int);
-
+double **prefix_parallel_stream(std::vector<std::pair<int, int>> &, double *, int, int, int);
 #endif
