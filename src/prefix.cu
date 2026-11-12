@@ -117,6 +117,7 @@ __device__ void prefix_sum_parallel(double *seq, const int n)
     {
         seq[id] = temp[id] + seq[id];
     }
+    __syncthreads();
 }
 
 __device__ void prefix_min_parallel(double *seq, const int n)
@@ -172,6 +173,7 @@ __device__ void prefix_min_parallel(double *seq, const int n)
     {
         seq[id] = min(seq[id], temp[id]);
     }
+    __syncthreads();
 }
 
 __global__ void dtw_prefix_kernel(const double *X, const int row_start, const int row_end, const double *Y, const int m, double *D, double *x, double *y)
